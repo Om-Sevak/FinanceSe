@@ -1,0 +1,10 @@
+fastapi
+sqlalchemy
+pydantic
+uvicorn
+python-multipart
+pandas
+pdfplumber
+scikit-learn
+numpy
+scipy

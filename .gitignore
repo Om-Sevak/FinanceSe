@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+app/artifacts/
+frontend/src/App.tsx.orig
+finance.db
