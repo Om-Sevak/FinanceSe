@@ -2,20 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import dayjs from "dayjs";
 import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import {
   createAccount,
   getExpensesByCategory,
   getMonthlySummary,
@@ -37,6 +23,14 @@ import type {
   TransactionCategoryUpdateResponse,
   TransactionSummary,
 } from "./types";
+import { Header } from "./components/Header";
+import { MetricsGrid } from "./components/MetricsGrid";
+import { ChartsSection } from "./components/ChartsSection";
+import { AccountsPanel } from "./components/AccountsPanel";
+import { UploadSummary } from "./components/UploadSummary";
+import { TransactionsTable } from "./components/TransactionsTable";
+import { AccountModal, BreakdownModal, UploadModal } from "./components/Modals";
+import { formatCurrency, formatPercent } from "./utils/formatters";
 import "./App.css";
 
 const monthNames = [
@@ -74,44 +68,29 @@ const ACCOUNT_TYPE_OPTIONS = [
 
 type BreakdownKind = "income" | "expense" | "investment";
 
-const BREAKDOWN_LABELS: Record<BreakdownKind, string> = {
-  income: "Total Income",
-  expense: "Total Expenses",
-  investment: "Total Invested",
+type DailyPoint = {
+  date: string;
+  income: number;
+  expenses: number;
+  net: number;
 };
 
-function formatCurrency(value: number) {
-  return value.toLocaleString(undefined, {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-  });
-}
-
-function formatPercent(value: number) {
-  return `${(value * 100).toFixed(1)}%`;
-}
-
-function formatAccountType(value: string) {
-  return (
-    ACCOUNT_TYPE_OPTIONS.find((option) => option.value === value)?.label ??
-    value
-  );
-}
+type YearlyPoint = {
+  monthLabel: string;
+  income: number;
+  expenses: number;
+  net: number;
+};
 
 export default function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [yearlyTransactions, setYearlyTransactions] = useState<Transaction[]>([]);
   const [summary, setSummary] = useState<TransactionSummary | null>(null);
-  const [categorySummary, setCategorySummary] = useState<
-    CategoryExpenseSummary[]
-  >([]);
+  const [categorySummary, setCategorySummary] = useState<CategoryExpenseSummary[]>([]);
   const [selectedYear, setSelectedYear] = useState(today.year());
   const [selectedMonth, setSelectedMonth] = useState(today.month() + 1);
-  const [selectedAccountId, setSelectedAccountId] = useState<number | "all">(
-    "all",
-  );
+  const [selectedAccountId, setSelectedAccountId] = useState<number | "all">("all");
   const [accountForm, setAccountForm] = useState<AccountCreate>({
     name: "",
     type: "chequing",
@@ -163,11 +142,9 @@ export default function App() {
       setUploadAccountId(String(accounts[0].id));
     }
   }, [accounts, uploadAccountId]);
-  const dailyTrend = useMemo(() => {
-    const map = new Map<
-      string,
-      { dateKey: string; income: number; expenses: number }
-    >();
+
+  const dailyTrend: DailyPoint[] = useMemo(() => {
+    const map = new Map<string, { dateKey: string; income: number; expenses: number }>();
     transactions.forEach((txn) => {
       const key = dayjs(txn.date).format("YYYY-MM-DD");
       const entry = map.get(key) ?? { dateKey: key, income: 0, expenses: 0 };
@@ -189,7 +166,7 @@ export default function App() {
       }));
   }, [transactions]);
 
-  const yearlySeries = useMemo(() => {
+  const yearlySeries: YearlyPoint[] = useMemo(() => {
     const baseline = Array.from({ length: 12 }, (_, idx) => ({
       monthLabel: dayjs().month(idx).format("MMM"),
       income: 0,
@@ -228,16 +205,6 @@ export default function App() {
     );
   }, [yearlySeries]);
 
-  const topCategories = useMemo(() => {
-    return [...categorySummary]
-      .map((entry) => ({
-        ...entry,
-        total_amount: Math.abs(entry.total_amount),
-      }))
-      .sort((a, b) => b.total_amount - a.total_amount)
-      .slice(0, 5);
-  }, [categorySummary]);
-
   const categoryOptions = useMemo(() => {
     const defaults = [
       "Income",
@@ -262,6 +229,7 @@ export default function App() {
     );
     return Array.from(new Set([...defaults, ...fromData]));
   }, [transactions]);
+
   async function loadAccounts() {
     try {
       const data = await listAccounts();
@@ -325,9 +293,7 @@ export default function App() {
     const confirmed = window.confirm(
       "This will delete every transaction in the database. Continue?",
     );
-    if (!confirmed) {
-      return;
-    }
+    if (!confirmed) return;
 
     setPurging(true);
     setError(null);
@@ -353,9 +319,7 @@ export default function App() {
     const confirmed = window.confirm(
       "This will delete every account and transaction via cascading delete. Continue?",
     );
-    if (!confirmed) {
-      return;
-    }
+    if (!confirmed) return;
 
     setPurgingAccounts(true);
     setError(null);
@@ -376,12 +340,8 @@ export default function App() {
   }
 
   async function handleRecategorize() {
-    const confirmed = window.confirm(
-      "Re-run categorization for every transaction?",
-    );
-    if (!confirmed) {
-      return;
-    }
+    const confirmed = window.confirm("Re-run categorization for every transaction?");
+    if (!confirmed) return;
     setRecategorizing(true);
     setError(null);
     try {
@@ -454,9 +414,7 @@ export default function App() {
       setUploadFile(null);
       event.currentTarget.reset();
       setUploadPreview(created);
-      setNotification(
-        `Uploaded ${created.length} transaction${created.length === 1 ? "" : "s"}.`,
-      );
+      setNotification(`Uploaded ${created.length} transaction${created.length === 1 ? "" : "s"}.`);
       await Promise.all([loadMonthlyData(), loadDashboardData(), loadYearlySnapshot()]);
       setShowUploadModal(false);
     } catch (err) {
@@ -473,15 +431,10 @@ export default function App() {
     setError(null);
     try {
       const payload = { category: nextCategory || "Uncategorized", retrain: true };
-      const response: TransactionCategoryUpdateResponse =
-        await updateTransactionCategory(txn.id, payload);
-      setTransactions((prev) =>
-        prev.map((item) => (item.id === txn.id ? response.transaction : item)),
-      );
+      const response: TransactionCategoryUpdateResponse = await updateTransactionCategory(txn.id, payload);
+      setTransactions((prev) => prev.map((item) => (item.id === txn.id ? response.transaction : item)));
       if (response.training?.trained) {
-        setNotification(
-          `Category updated and model retrained on ${response.training.samples} samples.`,
-        );
+        setNotification(`Category updated and model retrained on ${response.training.samples} samples.`);
       } else {
         setNotification("Category updated.");
       }
@@ -493,116 +446,25 @@ export default function App() {
     }
   }
 
-  function MetricCard({
-    label,
-    value,
-    hint,
-    highlight,
-    onClick,
-  }: {
-    label: string;
-    value: string;
-    hint?: string;
-    highlight?: "positive" | "negative";
-    onClick?: () => void;
-  }) {
-    return (
-      <div
-        className={`metric-card ${highlight ?? ""} ${onClick ? "clickable" : ""}`}
-        onClick={onClick}
-        role={onClick ? "button" : undefined}
-        tabIndex={onClick ? 0 : undefined}
-      >
-        <p className="metric-label">{label}</p>
-        <p className={`metric-value ${highlight ?? ""}`}>{value}</p>
-        {hint && <p className="metric-hint">{hint}</p>}
-      </div>
-    );
-  }
   return (
     <div className="app-shell">
-      <header className="hero">
-        <div>
-          <p className="eyebrow">Personal Finance Command Center</p>
-          <h1>Finance Dashboard</h1>
-          <p className="subtitle">
-            Upload monthly statements, track every account, and stay on top of
-            your cash flow, savings rate, and spending trends.
-          </p>
-        </div>
-        <div className="filters">
-          <label>
-            Year
-            <select
-              value={selectedYear}
-              onChange={(e) => setSelectedYear(Number(e.target.value))}
-            >
-              {yearOptions.map((year) => (
-                <option key={year} value={year}>
-                  {year}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Month
-            <select
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(Number(e.target.value))}
-            >
-              {monthNames.map((month, idx) => (
-                <option key={month} value={idx + 1}>
-                  {month}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Account
-            <select
-              value={selectedAccountId === "all" ? "all" : selectedAccountId}
-              onChange={(e) =>
-                setSelectedAccountId(
-                  e.target.value === "all" ? "all" : Number(e.target.value),
-                )
-              }
-            >
-              <option value="all">All accounts</option>
-              {accounts.map((acct) => (
-                <option key={acct.id} value={acct.id}>
-                  {acct.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <div className="dev-actions">
-          <button
-            type="button"
-            className="dev-button"
-            onClick={handlePurgeAll}
-            disabled={purging}
-          >
-            {purging ? "Purging..." : "DEV: Clear Transactions"}
-          </button>
-          <button
-            type="button"
-            className="dev-button danger"
-            onClick={handlePurgeAccounts}
-            disabled={purgingAccounts}
-          >
-            {purgingAccounts ? "Deleting..." : "DEV: Clear Accounts"}
-          </button>
-          <button
-            type="button"
-            className="dev-button neutral"
-            onClick={handleRecategorize}
-            disabled={recategorizing}
-          >
-            {recategorizing ? "Categorizing..." : "DEV: Reapply Categories"}
-          </button>
-        </div>
-      </header>
+      <Header
+        monthNames={monthNames}
+        yearOptions={yearOptions}
+        selectedYear={selectedYear}
+        selectedMonth={selectedMonth}
+        selectedAccountId={selectedAccountId}
+        accounts={accounts}
+        purging={purging}
+        purgingAccounts={purgingAccounts}
+        recategorizing={recategorizing}
+        onYearChange={setSelectedYear}
+        onMonthChange={setSelectedMonth}
+        onAccountChange={setSelectedAccountId}
+        onPurgeAll={handlePurgeAll}
+        onPurgeAccounts={handlePurgeAccounts}
+        onRecategorize={handleRecategorize}
+      />
 
       {notification && (
         <div className="toast success" onAnimationEnd={() => setNotification(null)}>
@@ -615,258 +477,37 @@ export default function App() {
         </div>
       )}
 
-      <section className="metrics-grid">
-        <MetricCard
-          label="Total Income"
-          value={summary ? formatCurrency(summary.total_income) : "--"}
-          hint="All accounts, selected month"
-          highlight="positive"
-          onClick={() => handleShowBreakdown("income")}
-        />
-        <MetricCard
-          label="Total Expenses"
-          value={
-            summary ? formatCurrency(Math.abs(summary.total_expenses)) : "--"
-          }
-          hint="Includes credit card payments"
-          highlight="negative"
-          onClick={() => handleShowBreakdown("expense")}
-        />
-        <MetricCard
-          label="Net Cash Flow"
-          value={summary ? formatCurrency(summary.net_flow) : "--"}
-          hint="Income + Expenses"
-          highlight={summary && summary.net_flow >= 0 ? "positive" : "negative"}
-        />
-        <MetricCard
-          label="Savings Rate"
-          value={summary ? formatPercent(summary.savings_rate) : "--"}
-          hint="(Income - Expenses) / Income"
-        />
-        <MetricCard
-          label="Total Invested"
-          value={summary ? formatCurrency(summary.total_invested) : "--"}
-          hint="Categorized as Investment"
-          highlight="positive"
-          onClick={() => handleShowBreakdown("investment")}
-        />
-        <MetricCard
-          label="Net Worth (approx.)"
-          value={summary ? formatCurrency(summary.net_worth) : "--"}
-          hint="Running total of all transactions"
-        />
-        <MetricCard
-          label="Year-To-Date Net Flow"
-          value={formatCurrency(yearlyTotals.netFlow)}
-          hint={`Jan-${monthNames[selectedMonth - 1].slice(0, 3)} ${selectedYear}`}
-          highlight={yearlyTotals.netFlow >= 0 ? "positive" : "negative"}
-        />
-      </section>
+      <MetricsGrid
+        summary={summary}
+        yearlyTotals={yearlyTotals}
+        selectedMonth={selectedMonth}
+        selectedYear={selectedYear}
+        monthNames={monthNames}
+        onShowBreakdown={handleShowBreakdown}
+        formatCurrency={formatCurrency}
+        formatPercent={formatPercent}
+      />
 
-      <section className="charts-grid">
-        <div className="card">
-          <header>
-            <h2>Daily Net Flow</h2>
-            <p>Income vs expenses for the selected month</p>
-          </header>
-          {loadingTransactions ? (
-            <p className="placeholder">Loading transactions...</p>
-          ) : dailyTrend.length === 0 ? (
-            <p className="placeholder">No transactions recorded.</p>
-          ) : (
-            <ResponsiveContainer width="100%" height={260}>
-              <LineChart data={dailyTrend}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Line
-                  type="monotone"
-                  dataKey="income"
-                  stroke="#16a34a"
-                  strokeWidth={2}
-                  dot={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="expenses"
-                  stroke="#ef4444"
-                  strokeWidth={2}
-                  dot={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="net"
-                  stroke="#2563eb"
-                  strokeWidth={2}
-                  dot={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-
-        <div className="card">
-          <header>
-            <h2>Expenses by Category</h2>
-            <p>Top categories for the selected month</p>
-          </header>
-          {loadingDashboard ? (
-            <p className="placeholder">Loading categories...</p>
-          ) : categorySummary.length === 0 ? (
-            <p className="placeholder">No categorized expenses.</p>
-          ) : (
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart
-                data={categorySummary.map((entry) => ({
-                  ...entry,
-                  amount: Math.abs(entry.total_amount),
-                }))}
-              >
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="category" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="amount" fill="#f97316" />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-      </section>
-
-      <section className="charts-grid">
-        <div className="card">
-          <header>
-            <h2>Yearly Momentum</h2>
-            <p>{selectedYear} income, expenses, and net by month</p>
-          </header>
-          <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={yearlySeries}>
-              <defs>
-                <linearGradient id="netGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#2563eb" stopOpacity={0.5} />
-                  <stop offset="95%" stopColor="#2563eb" stopOpacity={0.05} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="monthLabel" />
-              <YAxis />
-              <Tooltip />
-              <Legend />
-              <Area type="monotone" dataKey="income" stackId="1" stroke="#16a34a" fill="#16a34a20" />
-              <Area type="monotone" dataKey="expenses" stackId="1" stroke="#ef4444" fill="#ef444420" />
-              <Area type="monotone" dataKey="net" stroke="#2563eb" fill="url(#netGradient)" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="card yearly-card">
-          <header>
-            <h2>Year-To-Date Insights</h2>
-            <p>Totals across every account</p>
-          </header>
-          <ul>
-            <li>
-              <span>Total Income</span>
-              <strong>{formatCurrency(yearlyTotals.totalIncome)}</strong>
-            </li>
-            <li>
-              <span>Total Expenses</span>
-              <strong>{formatCurrency(yearlyTotals.totalExpenses)}</strong>
-            </li>
-            <li>
-              <span>Net Flow</span>
-              <strong className={yearlyTotals.netFlow >= 0 ? "positive" : "negative"}>
-                {formatCurrency(yearlyTotals.netFlow)}
-              </strong>
-            </li>
-          </ul>
-          <div className="top-categories">
-            <p>Top categories this month</p>
-            <ol>
-              {topCategories.map((entry) => (
-                <li key={entry.category}>
-                  <span>{entry.category}</span>
-                  <span>{formatCurrency(entry.total_amount)}</span>
-                </li>
-              ))}
-            </ol>
-          </div>
-        </div>
-      </section>
+      <ChartsSection
+        dailyTrend={dailyTrend}
+        yearlySeries={yearlySeries}
+        categorySummary={categorySummary}
+        loadingTransactions={loadingTransactions}
+        loadingDashboard={loadingDashboard}
+      />
 
       <section className="two-column">
-        <div className="card">
-          <header>
-            <h2>Accounts</h2>
-            <p>Bank accounts, credit cards, investment vehicles</p>
-          </header>
-          {accounts.length === 0 ? (
-            <p className="placeholder">No accounts yet. Add one below.</p>
-          ) : (
-            <ul className="account-list">
-              {accounts.map((acct) => (
-                <li key={acct.id}>
-                  <div>
-                    <strong>{acct.name}</strong>
-                    <p>
-                      {formatAccountType(acct.type)} - {acct.institution}
-                    </p>
-                    <button
-                      type="button"
-                      className="link-button subtle"
-                      onClick={() => {
-                        setUploadAccountId(String(acct.id));
-                        setShowUploadModal(true);
-                      }}
-                    >
-                      Upload Statement
-                    </button>
-                  </div>
-                  <span>{acct.currency}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          <button type="button" className="action-button" onClick={() => setShowAccountModal(true)}>
-            Add Account
-          </button>
-        </div>
-
-        <div className="card">
-          <header>
-            <h2>Recent Uploads</h2>
-            <p>Last batch imported from statements</p>
-          </header>
-          {uploadPreview ? (
-            <div className="upload-preview">
-              <p>
-                Server added {uploadPreview.length} transaction
-                {uploadPreview.length === 1 ? "" : "s"}.
-              </p>
-              <ul>
-                {uploadPreview.slice(0, 5).map((txn) => (
-                  <li key={txn.id}>
-                    <span>{dayjs(txn.date).format("MMM D")}</span>
-                    <span>{txn.description_clean ?? txn.description_raw}</span>
-                    <span className={txn.amount >= 0 ? "positive" : "negative"}>
-                      {formatCurrency(Number(txn.amount))}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              {uploadPreview.length > 5 && (
-                <p className="upload-preview-note">
-                  Showing first 5 of {uploadPreview.length} entries.
-                </p>
-              )}
-            </div>
-          ) : (
-            <p className="placeholder">No uploads yet. Use “Upload Statement” inside an account.</p>
-          )}
-        </div>
+        <AccountsPanel
+          accounts={accounts}
+          onAddAccount={() => setShowAccountModal(true)}
+          onUpload={(id) => {
+            setUploadAccountId(String(id));
+            setShowUploadModal(true);
+          }}
+        />
+        <UploadSummary uploadPreview={uploadPreview} />
       </section>
+
       <section className="card">
         <header>
           <h2>Latest Transactions</h2>
@@ -877,261 +518,98 @@ export default function App() {
         ) : transactions.length === 0 ? (
           <p className="placeholder">No transactions available.</p>
         ) : (
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Description</th>
-                  <th>Account</th>
-                  <th>Category</th>
-                  <th className="amount">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {transactions.map((txn) => (
-                  <tr key={txn.id}>
-                    <td>{dayjs(txn.date).format("MMM D")}</td>
-                    <td>{txn.description_clean ?? txn.description_raw}</td>
-                    <td>{txn.account?.name ?? txn.account_id}</td>
-                    <td className="category-cell">
-                      <div className="category-select-wrapper">
-                        <select
-                          className="category-select"
-                          value={txn.category ?? ""}
-                          onChange={(e) =>
-                            handleCategoryUpdate(txn, e.target.value || "Uncategorized")
-                          }
-                          disabled={updatingCategoryId === txn.id}
-                        >
-                          <option value="">Uncategorized</option>
-                          {categoryOptions.map((option) => (
-                            <option key={option} value={option}>
-                              {option}
-                            </option>
-                          ))}
-                        </select>
-                        {updatingCategoryId === txn.id && (
-                          <span className="saving-indicator">Saving…</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className={txn.amount >= 0 ? "positive" : "negative"}>
-                      {formatCurrency(Number(txn.amount))}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <TransactionsTable
+            transactions={transactions}
+            categoryOptions={categoryOptions}
+            updatingCategoryId={updatingCategoryId}
+            onCategoryChange={(txn, category) => handleCategoryUpdate(txn, category)}
+          />
         )}
       </section>
 
-      {showAccountModal && (
-        <div className="modal-backdrop" onClick={() => setShowAccountModal(false)}>
-          <div
-            className="modal"
-            onClick={(e) => {
-              e.stopPropagation();
-            }}
-          >
-            <header>
-              <h3>Add Account</h3>
-              <button type="button" className="close-button" onClick={() => setShowAccountModal(false)}>
-                Close
-              </button>
-            </header>
-            <form
-              className="stack"
-              onSubmit={(event) => {
-                handleAccountSubmit(event);
-              }}
-            >
-              <div className="grid-2">
-                <label>
-                  Name
-                  <input
-                    value={accountForm.name}
-                    onChange={(e) => setAccountForm({ ...accountForm, name: e.target.value })}
-                    required
-                  />
-                </label>
-                <label>
-                  Type
-                  <select
-                    value={accountForm.type}
-                    onChange={(e) => setAccountForm({ ...accountForm, type: e.target.value })}
-                    required
-                  >
-                    {ACCOUNT_TYPE_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <div className="grid-2">
-                <label>
-                  Institution
-                  <input
-                    value={accountForm.institution}
-                    onChange={(e) =>
-                      setAccountForm({
-                        ...accountForm,
-                        institution: e.target.value,
-                      })
-                    }
-                    required
-                  />
-                </label>
-                <label>
-                  Currency
-                  <input
-                    value={accountForm.currency}
-                    onChange={(e) => setAccountForm({ ...accountForm, currency: e.target.value })}
-                    required
-                  />
-                </label>
-              </div>
-              <button type="submit" className="action-button">
-                Save account
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {showUploadModal && (
-        <div className="modal-backdrop" onClick={() => setShowUploadModal(false)}>
-          <div
-            className="modal"
-            onClick={(e) => {
-              e.stopPropagation();
-            }}
-          >
-            <header>
-              <h3>Upload Statement</h3>
-              <button type="button" className="close-button" onClick={() => setShowUploadModal(false)}>
-                Close
-              </button>
-            </header>
-            <form
-              className="stack"
-              onSubmit={(event) => {
-                handleUpload(event);
-              }}
-            >
-              <label>
-                Account
-                <select
-                  value={uploadAccountId}
-                  onChange={(e) => setUploadAccountId(e.target.value)}
-                  required
-                >
-                  <option value="" disabled>
-                    Choose account
+      <AccountModal open={showAccountModal} onClose={() => setShowAccountModal(false)}>
+        <form className="stack" onSubmit={handleAccountSubmit}>
+          <div className="grid-2">
+            <label>
+              Name
+              <input
+                value={accountForm.name}
+                onChange={(e) => setAccountForm({ ...accountForm, name: e.target.value })}
+                required
+              />
+            </label>
+            <label>
+              Type
+              <select
+                value={accountForm.type}
+                onChange={(e) => setAccountForm({ ...accountForm, type: e.target.value })}
+                required
+              >
+                {ACCOUNT_TYPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
                   </option>
-                  {accounts.map((acct) => (
-                    <option key={acct.id} value={acct.id}>
-                      {acct.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                {uploadFormat === "pdf" ? "PDF Statement" : "CSV File"}
-                <input
-                  type="file"
-                  accept={uploadFormat === "pdf" ? "application/pdf,.pdf" : ".csv,text/csv"}
-                  onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
-                  required
-                />
-              </label>
-              <div className="format-toggle">
-                <label>
-                  <input
-                    type="radio"
-                    name="upload-format"
-                    value="csv"
-                    checked={uploadFormat === "csv"}
-                    onChange={() => setUploadFormat("csv")}
-                  />
-                  CSV
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="upload-format"
-                    value="pdf"
-                    checked={uploadFormat === "pdf"}
-                    onChange={() => setUploadFormat("pdf")}
-                  />
-                  PDF
-                </label>
-              </div>
-              <button type="submit" className="action-button" disabled={uploading}>
-                {uploading ? "Uploading..." : "Upload & categorize"}
-              </button>
-              {uploading && <p className="uploading-indicator">Processing file...</p>}
-            </form>
+                ))}
+              </select>
+            </label>
           </div>
-        </div>
-      )}
+          <div className="grid-2">
+            <label>
+              Institution
+              <input
+                value={accountForm.institution}
+                onChange={(e) =>
+                  setAccountForm({
+                    ...accountForm,
+                    institution: e.target.value,
+                  })
+                }
+                required
+              />
+            </label>
+            <label>
+              Currency
+              <input
+                value={accountForm.currency}
+                onChange={(e) => setAccountForm({ ...accountForm, currency: e.target.value })}
+                required
+              />
+            </label>
+          </div>
+          <button type="submit" className="action-button">
+            Save account
+          </button>
+        </form>
+      </AccountModal>
 
-      {breakdownType && (
-        <div className="modal-backdrop" onClick={closeBreakdown}>
-          <div
-            className="modal"
-            onClick={(e) => {
-              e.stopPropagation();
-            }}
-          >
-            <header>
-              <h3>{BREAKDOWN_LABELS[breakdownType]}</h3>
-              <button type="button" className="close-button" onClick={closeBreakdown}>
-                Close
-              </button>
-            </header>
-            <p>
-              {monthNames[selectedMonth - 1]} {selectedYear} -{" "}
-              {breakdownTransactions.length} transactions
-            </p>
-            {breakdownLoading ? (
-              <p className="placeholder">Loading breakdown...</p>
-            ) : breakdownTransactions.length === 0 ? (
-              <p className="placeholder">No transactions matched.</p>
-            ) : (
-              <div className="table-wrapper modal-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Description</th>
-                      <th>Account</th>
-                      <th>Category</th>
-                      <th className="amount">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {breakdownTransactions.map((txn) => (
-                      <tr key={txn.id}>
-                        <td>{dayjs(txn.date).format("MMM D")}</td>
-                        <td>{txn.description_clean ?? txn.description_raw}</td>
-                        <td>{txn.account?.name ?? txn.account_id}</td>
-                        <td>{txn.category ?? "Uncategorized"}</td>
-                        <td className={txn.amount >= 0 ? "positive" : "negative"}>
-                          {formatCurrency(Number(txn.amount))}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      <UploadModal
+        open={showUploadModal}
+        onClose={() => setShowUploadModal(false)}
+        accounts={accounts}
+        uploadAccountId={uploadAccountId}
+        uploadFormat={uploadFormat}
+        uploading={uploading}
+        onAccountChange={setUploadAccountId}
+        onFormatChange={setUploadFormat}
+        onFileChange={setUploadFile}
+        onSubmit={handleUpload}
+      />
+
+      <BreakdownModal
+        open={Boolean(breakdownType)}
+        onClose={closeBreakdown}
+        monthLabel={monthNames[selectedMonth - 1]}
+        year={selectedYear}
+        transactions={breakdownTransactions}
+        loading={breakdownLoading}
+        label={
+          breakdownType === "income"
+            ? "Total Income"
+            : breakdownType === "expense"
+              ? "Total Expenses"
+              : "Total Invested"
+        }
+      />
     </div>
   );
 }
