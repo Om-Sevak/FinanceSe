@@ -17,6 +17,10 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import train_test_split
 
+from .category_labels import ACCOUNT_TRANSFER_CATEGORY, canonicalize_category
+from .category_overrides import lookup_override
+from .text_utils import normalize_description
+
 # Lightweight fallback rules used when the model is missing or unconfident.
 CATEGORIZATION_RULES = {
     "Groceries": ["supermarket", "grocery", "wal-mart", "costco"],
@@ -29,28 +33,8 @@ CATEGORIZATION_RULES = {
     "Rent": ["rent"],
     "Income": ["salary", "payroll", "standard aero", "paycheque"],
     "Investment": ["brokerage", "investments", "investment", "inv", "ppp", "tfsa", "rrsp"],
-    "Credit Payment": ["payment", "thank", "you", "received"],
+    ACCOUNT_TRANSFER_CATEGORY: ["payment", "thank", "you", "received"],
 }
-
-STOPWORDS = {
-    "pos",
-    "visa",
-    "debit",
-    "credit",
-    "purchase",
-    "auth",
-    "card",
-    "transaction",
-    "withdrawal",
-    "deposit",
-    "online",
-    "transfer",
-}
-
-NOISE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\d{2,}"),  # strip long digit runs (timestamps, ids)
-    re.compile(r"\s+"),
-)
 
 AUTO_APPLY_THRESHOLD = 0.58
 MODEL_DIR = Path(__file__).resolve().parent / "artifacts"
@@ -116,15 +100,6 @@ class SmartCategorizer:
             self._bundle = joblib.load(self.model_path)
 
     @staticmethod
-    def _normalize_text(text: str) -> str:
-        lowered = (text or "").lower()
-        lowered = lowered.replace(";", " ").replace(",", " ")
-        for pattern in NOISE_PATTERNS:
-            lowered = pattern.sub(" ", lowered)
-        tokens = [tok for tok in lowered.split(" ") if tok and tok not in STOPWORDS]
-        return " ".join(tokens).strip()
-
-    @staticmethod
     def _meta_features(amount: float | None, date_value: date | None, account_type: str | None) -> dict[str, str]:
         meta: dict[str, str] = {}
         if amount is not None and not math.isinf(amount) and not math.isnan(amount):
@@ -166,7 +141,7 @@ class SmartCategorizer:
         account_type: str | None = None,
         threshold: float = AUTO_APPLY_THRESHOLD,
     ) -> PredictionResult:
-        normalized = self._normalize_text(description)
+        normalized = normalize_description(description)
         if not self._bundle:
             return PredictionResult(
                 category=None,
@@ -199,7 +174,7 @@ class SmartCategorizer:
         if not samples:
             return TrainReport(False, 0, [], None, None, 0, None)
 
-        texts = [self._normalize_text(s.description) for s in samples]
+        texts = [normalize_description(s.description) for s in samples]
         metas = [self._meta_features(s.amount, s.date_value, s.account_type) for s in samples]
         labels = [s.category for s in samples]
 
@@ -281,7 +256,7 @@ def _fallback_rule(description: str) -> str | None:
     lowered = (description or "").lower()
     for category, keywords in CATEGORIZATION_RULES.items():
         if any(keyword in lowered for keyword in keywords):
-            return category
+            return canonicalize_category(category)
     return None
 
 
@@ -299,7 +274,7 @@ def categorize_transaction(
         description, amount=amount, date_value=date_value, account_type=account_type
     )
     if prediction.category:
-        return prediction.category
+        return canonicalize_category(prediction.category)
     return _fallback_rule(description)
 
 
@@ -316,7 +291,8 @@ def categorize_with_details(
     prediction = _SMART_CATEGORIZER.predict(
         description, amount=amount, date_value=date_value, account_type=account_type
     )
-    if prediction.category is None:
+    canonical_category = canonicalize_category(prediction.category)
+    if canonical_category is None:
         fallback = _fallback_rule(description)
         if fallback:
             return PredictionResult(
@@ -326,6 +302,11 @@ def categorize_with_details(
                 top_categories=[],
                 normalized_description=prediction.normalized_description,
             )
+    prediction.category = canonical_category
+    prediction.top_categories = [
+        (canonicalize_category(category) or category, confidence)
+        for category, confidence in prediction.top_categories
+    ]
     return prediction
 
 
@@ -336,7 +317,8 @@ def train_from_transactions(transactions: Iterable) -> TrainReport:
     """
     samples: list[TrainingExample] = []
     for txn in transactions:
-        if not txn.category:
+        category = canonicalize_category(txn.category)
+        if not category:
             continue
         samples.append(
             TrainingExample(
@@ -344,7 +326,7 @@ def train_from_transactions(transactions: Iterable) -> TrainReport:
                 amount=float(txn.amount) if txn.amount is not None else None,
                 date_value=txn.date,
                 account_type=getattr(getattr(txn, "account", None), "type", None),
-                category=txn.category,
+                category=category,
             )
         )
     return _SMART_CATEGORIZER.train(samples)
