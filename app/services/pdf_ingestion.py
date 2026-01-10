@@ -53,7 +53,9 @@ def _clean_amount(value: Any) -> float | None:
         number = float(text)
     except ValueError:
         return None
-    return -number if negative or number < 0 else number
+    if negative:
+        return -abs(number)
+    return number
 
 
 def _split_cell(cell: Any) -> list[str]:

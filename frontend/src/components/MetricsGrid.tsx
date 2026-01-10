@@ -6,13 +6,14 @@ interface YearlyTotals {
   totalIncome: number;
   totalExpenses: number;
   netFlow: number;
+  totalInvested: number;
 }
 
 interface Props {
   summary: TransactionSummary | null;
   yearlyTotals: YearlyTotals;
-  selectedMonth: number;
-  selectedYear: number;
+  selectedMonth: number | "all";
+  selectedYear: number | "all";
   monthNames: string[];
   onShowBreakdown: (kind: BreakdownKind) => void;
   formatCurrency: (value: number) => string;
@@ -33,7 +34,11 @@ function MetricCard({
   onClick?: () => void;
 }) {
   return (
-    <div className={`metric-card ${highlight ?? ""} ${onClick ? "clickable" : ""}`} onClick={onClick} role={onClick ? "button" : undefined}>
+    <div
+      className={`metric-card ${highlight ?? ""} ${onClick ? "clickable" : ""}`}
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+    >
       <p className="metric-label">{label}</p>
       <p className={`metric-value ${highlight ?? ""}`}>{value}</p>
       {hint && <p className="metric-hint">{hint}</p>}
@@ -93,8 +98,20 @@ export function MetricsGrid({
       <MetricCard
         label="Year-To-Date Net Flow"
         value={formatCurrency(yearlyTotals.netFlow)}
-        hint={`Jan-${monthNames[selectedMonth - 1].slice(0, 3)} ${selectedYear}`}
+        hint={
+          selectedYear === "all"
+            ? "Across all years"
+            : selectedMonth === "all"
+              ? `Jan-Dec ${selectedYear}`
+              : `Jan-${monthNames[(selectedMonth as number) - 1].slice(0, 3)} ${selectedYear}`
+        }
         highlight={yearlyTotals.netFlow >= 0 ? "positive" : "negative"}
+      />
+      <MetricCard
+        label="Year-To-Date Invested"
+        value={formatCurrency(yearlyTotals.totalInvested)}
+        hint="Sum of investment contributions this year"
+        highlight="positive"
       />
     </section>
   );

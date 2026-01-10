@@ -14,6 +14,10 @@ import {
   updateTransactionCategory,
   uploadPdfStatement,
   uploadStatement,
+  registerUser,
+  loginUser,
+  getCurrentUser,
+  setAuthToken,
 } from "./api";
 import type {
   Account,
@@ -22,13 +26,14 @@ import type {
   Transaction,
   TransactionCategoryUpdateResponse,
   TransactionSummary,
+  User,
 } from "./types";
 import { Header } from "./components/Header";
 import { MetricsGrid } from "./components/MetricsGrid";
 import { ChartsSection } from "./components/ChartsSection";
 import { AccountsPanel } from "./components/AccountsPanel";
-import { UploadSummary } from "./components/UploadSummary";
 import { TransactionsTable } from "./components/TransactionsTable";
+import { Tabs } from "./components/Tabs";
 import { AccountModal, BreakdownModal, UploadModal } from "./components/Modals";
 import { formatCurrency, formatPercent } from "./utils/formatters";
 import "./App.css";
@@ -88,8 +93,8 @@ export default function App() {
   const [yearlyTransactions, setYearlyTransactions] = useState<Transaction[]>([]);
   const [summary, setSummary] = useState<TransactionSummary | null>(null);
   const [categorySummary, setCategorySummary] = useState<CategoryExpenseSummary[]>([]);
-  const [selectedYear, setSelectedYear] = useState(today.year());
-  const [selectedMonth, setSelectedMonth] = useState(today.month() + 1);
+  const [selectedYear, setSelectedYear] = useState<number | "all">(today.year());
+  const [selectedMonth, setSelectedMonth] = useState<number | "all">(today.month() + 1);
   const [selectedAccountId, setSelectedAccountId] = useState<number | "all">("all");
   const [accountForm, setAccountForm] = useState<AccountCreate>({
     name: "",
@@ -98,13 +103,18 @@ export default function App() {
     currency: "CAD",
   });
   const [uploadAccountId, setUploadAccountId] = useState<string>("");
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadPreview, setUploadPreview] = useState<Transaction[] | null>(null);
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadFormat, setUploadFormat] = useState<"csv" | "pdf">("csv");
+  const [uploadFolderMode, setUploadFolderMode] = useState(false);
   const [purging, setPurging] = useState(false);
   const [purgingAccounts, setPurgingAccounts] = useState(false);
   const [recategorizing, setRecategorizing] = useState(false);
+  const [activeTab, setActiveTab] = useState<"metrics" | "accounts" | "transactions">("metrics");
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authMode, setAuthMode] = useState<"login" | "signup">("login");
+  const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
   const [breakdownType, setBreakdownType] = useState<BreakdownKind | null>(null);
   const [breakdownTransactions, setBreakdownTransactions] = useState<Transaction[]>([]);
   const [breakdownLoading, setBreakdownLoading] = useState(false);
@@ -115,6 +125,7 @@ export default function App() {
   const [updatingCategoryId, setUpdatingCategoryId] = useState<number | null>(null);
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [authSubmitting, setAuthSubmitting] = useState(false);
 
   const yearOptions = useMemo(() => {
     const baseYear = today.year();
@@ -122,26 +133,48 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    loadAccounts();
+    // hydrate token and user from storage
+    const stored = localStorage.getItem("auth_token");
+    if (stored) {
+      setAuthToken(stored);
+      getCurrentUser()
+        .then((me) => setUser(me))
+        .catch(() => {
+          localStorage.removeItem("auth_token");
+          setAuthToken(null);
+        })
+        .finally(() => setAuthLoading(false));
+    } else {
+      setAuthLoading(false);
+    }
   }, []);
 
   useEffect(() => {
+    if (!user) return;
+    loadAccounts();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
     loadMonthlyData();
-  }, [selectedAccountId, selectedYear, selectedMonth]);
+  }, [user, selectedAccountId, selectedYear, selectedMonth]);
 
   useEffect(() => {
+    if (!user) return;
     loadDashboardData();
-  }, [selectedYear, selectedMonth]);
+  }, [user, selectedYear, selectedMonth]);
 
   useEffect(() => {
+    if (!user) return;
     loadYearlySnapshot();
-  }, [selectedYear]);
+  }, [user, selectedYear]);
 
   useEffect(() => {
+    if (!user) return;
     if (accounts.length && !uploadAccountId) {
       setUploadAccountId(String(accounts[0].id));
     }
-  }, [accounts, uploadAccountId]);
+  }, [accounts, uploadAccountId, user]);
 
   const dailyTrend: DailyPoint[] = useMemo(() => {
     const map = new Map<string, { dateKey: string; income: number; expenses: number }>();
@@ -194,16 +227,28 @@ export default function App() {
   }, [yearlyTransactions]);
 
   const yearlyTotals = useMemo(() => {
-    return yearlySeries.reduce(
+    const totals = yearlySeries.reduce(
       (acc, month) => {
         acc.totalIncome += month.income;
         acc.totalExpenses += month.expenses;
         acc.netFlow += month.net;
         return acc;
       },
-      { totalIncome: 0, totalExpenses: 0, netFlow: 0 },
+      { totalIncome: 0, totalExpenses: 0, netFlow: 0, totalInvested: 0 },
     );
-  }, [yearlySeries]);
+
+    yearlyTransactions.forEach((txn) => {
+      if ((txn.category || "").toLowerCase() === "investment") {
+        totals.totalInvested += Math.abs(Number(txn.amount));
+      }
+    });
+
+    totals.totalIncome = Number(totals.totalIncome.toFixed(2));
+    totals.totalExpenses = Number(totals.totalExpenses.toFixed(2));
+    totals.netFlow = Number(totals.netFlow.toFixed(2));
+    totals.totalInvested = Number(totals.totalInvested.toFixed(2));
+    return totals;
+  }, [yearlySeries, yearlyTransactions]);
 
   const categoryOptions = useMemo(() => {
     const defaults = [
@@ -244,10 +289,9 @@ export default function App() {
     setLoadingTransactions(true);
     setError(null);
     try {
-      const params: { year: number; month: number; account_id?: number } = {
-        year: selectedYear,
-        month: selectedMonth,
-      };
+      const params: { year?: number; month?: number; account_id?: number } = {};
+      if (selectedYear !== "all") params.year = selectedYear;
+      if (selectedMonth !== "all") params.month = selectedMonth;
       if (selectedAccountId !== "all") {
         params.account_id = selectedAccountId;
       }
@@ -266,8 +310,8 @@ export default function App() {
     setError(null);
     try {
       const [summaryData, categoryData] = await Promise.all([
-        getMonthlySummary(selectedYear, selectedMonth),
-        getExpensesByCategory(selectedYear, selectedMonth),
+        getMonthlySummary(selectedYear === "all" ? undefined : selectedYear, selectedMonth === "all" ? undefined : selectedMonth),
+        getExpensesByCategory(selectedYear === "all" ? undefined : selectedYear, selectedMonth === "all" ? undefined : selectedMonth),
       ]);
       setSummary(summaryData);
       setCategorySummary(categoryData);
@@ -281,7 +325,9 @@ export default function App() {
 
   async function loadYearlySnapshot() {
     try {
-      const yearlyData = await listTransactions({ year: selectedYear });
+      const params: { year?: number } = {};
+      if (selectedYear !== "all") params.year = selectedYear;
+      const yearlyData = await listTransactions(params);
       setYearlyTransactions(yearlyData);
     } catch (err) {
       console.error(err);
@@ -363,7 +409,11 @@ export default function App() {
     setBreakdownTransactions([]);
     setBreakdownLoading(true);
     try {
-      const data = await getTransactionBreakdown(kind, selectedYear, selectedMonth);
+      const data = await getTransactionBreakdown(
+        kind,
+        selectedYear === "all" ? undefined : selectedYear,
+        selectedMonth === "all" ? undefined : selectedMonth,
+      );
       setBreakdownTransactions(data);
     } catch (err) {
       console.error(err);
@@ -400,27 +450,29 @@ export default function App() {
 
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!uploadAccountId || !uploadFile) {
-      setError("Choose both an account and a statement file.");
+    if (!uploadAccountId || uploadFiles.length === 0) {
+      setError("Choose both an account and at least one statement file.");
       return;
     }
 
     setUploading(true);
     try {
-      const created =
-        uploadFormat === "pdf"
-          ? await uploadPdfStatement(Number(uploadAccountId), uploadFile)
-          : await uploadStatement(Number(uploadAccountId), uploadFile);
-      setUploadFile(null);
+      let totalCreated = 0;
+      for (const file of uploadFiles) {
+        const created =
+          uploadFormat === "pdf"
+            ? await uploadPdfStatement(Number(uploadAccountId), file)
+            : await uploadStatement(Number(uploadAccountId), file);
+        totalCreated += created.length;
+      }
+      setUploadFiles([]);
       event.currentTarget.reset();
-      setUploadPreview(created);
-      setNotification(`Uploaded ${created.length} transaction${created.length === 1 ? "" : "s"}.`);
+      setNotification(`Uploaded ${totalCreated} transaction${totalCreated === 1 ? "" : "s"} from ${uploadFiles.length} file${uploadFiles.length === 1 ? "" : "s"}.`);
       await Promise.all([loadMonthlyData(), loadDashboardData(), loadYearlySnapshot()]);
       setShowUploadModal(false);
     } catch (err) {
       console.error(err);
       setError("Failed to upload the statement. Double check the format.");
-      setUploadPreview(null);
     } finally {
       setUploading(false);
     }
@@ -430,7 +482,7 @@ export default function App() {
     setUpdatingCategoryId(txn.id);
     setError(null);
     try {
-      const payload = { category: nextCategory || "Uncategorized", retrain: true };
+      const payload = { category: nextCategory || "Uncategorized" };
       const response: TransactionCategoryUpdateResponse = await updateTransactionCategory(txn.id, payload);
       setTransactions((prev) => prev.map((item) => (item.id === txn.id ? response.transaction : item)));
       if (response.training?.trained) {
@@ -444,6 +496,102 @@ export default function App() {
     } finally {
       setUpdatingCategoryId(null);
     }
+  }
+
+  async function loadAllData() {
+    await Promise.all([loadAccounts(), loadMonthlyData(), loadDashboardData(), loadYearlySnapshot()]);
+  }
+
+  async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    setAuthSubmitting(true);
+    try {
+      if (authMode === "signup") {
+        await registerUser(authForm);
+      }
+      const tokenResponse = await loginUser({ email: authForm.email, password: authForm.password });
+      localStorage.setItem("auth_token", tokenResponse.access_token);
+      setAuthToken(tokenResponse.access_token);
+      const me = await getCurrentUser();
+      setUser(me);
+      await loadAllData();
+    } catch (err) {
+      console.error(err);
+      setError("Authentication failed. Check your credentials.");
+    } finally {
+      setAuthSubmitting(false);
+      setAuthLoading(false);
+    }
+  }
+
+  if (authLoading) {
+    return (
+      <div className="app-shell">
+        <p className="placeholder">Checking session...</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="app-shell auth-shell">
+        <div className="card auth-card">
+          <header>
+            <h2>{authMode === "login" ? "Welcome back" : "Create your account"}</h2>
+            <p>{authMode === "login" ? "Sign in to your dashboard" : "Set up your profile to get started"}</p>
+          </header>
+          <div className="auth-toggle">
+            <button
+              className={`tab-button ${authMode === "login" ? "active" : ""}`}
+              onClick={() => setAuthMode("login")}
+            >
+              Login
+            </button>
+            <button
+              className={`tab-button ${authMode === "signup" ? "active" : ""}`}
+              onClick={() => setAuthMode("signup")}
+            >
+              Sign Up
+            </button>
+          </div>
+          <form className="stack" onSubmit={handleAuthSubmit}>
+            {authMode === "signup" && (
+              <label>
+                Name
+                <input
+                  value={authForm.name}
+                  onChange={(e) => setAuthForm({ ...authForm, name: e.target.value })}
+                  required
+                />
+              </label>
+            )}
+            <label>
+              Email
+              <input
+                type="email"
+                value={authForm.email}
+                onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+                required
+              />
+            </label>
+            <label>
+              Password
+              <input
+                type="password"
+                value={authForm.password}
+                onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+                required
+              />
+            </label>
+            <button className="action-button" type="submit" disabled={authSubmitting}>
+              {authSubmitting ? "Working..." : authMode === "login" ? "Login" : "Sign Up"}
+            </button>
+          </form>
+          {error && <p className="toast error">{error}</p>}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -488,44 +636,66 @@ export default function App() {
         formatPercent={formatPercent}
       />
 
-      <ChartsSection
-        dailyTrend={dailyTrend}
-        yearlySeries={yearlySeries}
-        categorySummary={categorySummary}
-        loadingTransactions={loadingTransactions}
-        loadingDashboard={loadingDashboard}
+      <Tabs
+        tabs={[
+          {
+            id: "metrics",
+            label: "Key Metrics",
+            content: (
+              <ChartsSection
+                dailyTrend={dailyTrend}
+                yearlySeries={yearlySeries}
+                categorySummary={categorySummary}
+                loadingTransactions={loadingTransactions}
+                loadingDashboard={loadingDashboard}
+                summary={summary}
+              />
+            ),
+          },
+          {
+            id: "accounts",
+            label: "Accounts",
+            content: (
+              <section className="card">
+                <AccountsPanel
+                  accounts={accounts}
+                  onAddAccount={() => setShowAccountModal(true)}
+                  onUpload={(id) => {
+                    setUploadAccountId(String(id));
+                    setShowUploadModal(true);
+                  }}
+                />
+              </section>
+            ),
+          },
+          {
+            id: "transactions",
+            label: "Transactions",
+            content: (
+              <section className="card">
+                <header>
+                  <h2>Latest Transactions</h2>
+                  <p>Showing entries for the selected filters</p>
+                </header>
+                {loadingTransactions ? (
+                  <p className="placeholder">Loading transactions...</p>
+                ) : transactions.length === 0 ? (
+                  <p className="placeholder">No transactions available.</p>
+                ) : (
+                  <TransactionsTable
+                    transactions={transactions}
+                    categoryOptions={categoryOptions}
+                    updatingCategoryId={updatingCategoryId}
+                    onCategoryChange={(txn, category) => handleCategoryUpdate(txn, category)}
+                  />
+                )}
+              </section>
+            ),
+          },
+        ]}
+        activeId={activeTab}
+        onChange={(id) => setActiveTab(id as typeof activeTab)}
       />
-
-      <section className="two-column">
-        <AccountsPanel
-          accounts={accounts}
-          onAddAccount={() => setShowAccountModal(true)}
-          onUpload={(id) => {
-            setUploadAccountId(String(id));
-            setShowUploadModal(true);
-          }}
-        />
-        <UploadSummary uploadPreview={uploadPreview} />
-      </section>
-
-      <section className="card">
-        <header>
-          <h2>Latest Transactions</h2>
-          <p>Showing entries for the selected filters</p>
-        </header>
-        {loadingTransactions ? (
-          <p className="placeholder">Loading transactions...</p>
-        ) : transactions.length === 0 ? (
-          <p className="placeholder">No transactions available.</p>
-        ) : (
-          <TransactionsTable
-            transactions={transactions}
-            categoryOptions={categoryOptions}
-            updatingCategoryId={updatingCategoryId}
-            onCategoryChange={(txn, category) => handleCategoryUpdate(txn, category)}
-          />
-        )}
-      </section>
 
       <AccountModal open={showAccountModal} onClose={() => setShowAccountModal(false)}>
         <form className="stack" onSubmit={handleAccountSubmit}>
@@ -588,17 +758,19 @@ export default function App() {
         accounts={accounts}
         uploadAccountId={uploadAccountId}
         uploadFormat={uploadFormat}
+        uploadFolderMode={uploadFolderMode}
         uploading={uploading}
         onAccountChange={setUploadAccountId}
         onFormatChange={setUploadFormat}
-        onFileChange={setUploadFile}
+        onFolderModeChange={setUploadFolderMode}
+        onFileChange={setUploadFiles}
         onSubmit={handleUpload}
       />
 
       <BreakdownModal
         open={Boolean(breakdownType)}
         onClose={closeBreakdown}
-        monthLabel={monthNames[selectedMonth - 1]}
+        monthLabel={selectedMonth === "all" ? "All months" : monthNames[(selectedMonth as number) - 1]}
         year={selectedYear}
         transactions={breakdownTransactions}
         loading={breakdownLoading}

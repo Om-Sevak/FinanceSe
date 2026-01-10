@@ -5,15 +5,15 @@ type AccountId = number | "all";
 interface Props {
   monthNames: string[];
   yearOptions: number[];
-  selectedYear: number;
-  selectedMonth: number;
+  selectedYear: number | "all";
+  selectedMonth: number | "all";
   selectedAccountId: AccountId;
   accounts: Account[];
   purging: boolean;
   purgingAccounts: boolean;
   recategorizing: boolean;
-  onYearChange: (year: number) => void;
-  onMonthChange: (month: number) => void;
+  onYearChange: (year: number | "all") => void;
+  onMonthChange: (month: number | "all") => void;
   onAccountChange: (id: AccountId) => void;
   onPurgeAll: () => void;
   onPurgeAccounts: () => void;
@@ -50,7 +50,11 @@ export function Header({
       <div className="filters">
         <label>
           Year
-          <select value={selectedYear} onChange={(e) => onYearChange(Number(e.target.value))}>
+          <select
+            value={selectedYear === "all" ? "all" : selectedYear}
+            onChange={(e) => onYearChange(e.target.value === "all" ? "all" : Number(e.target.value))}
+          >
+            <option value="all">All years</option>
             {yearOptions.map((year) => (
               <option key={year} value={year}>
                 {year}
@@ -60,7 +64,11 @@ export function Header({
         </label>
         <label>
           Month
-          <select value={selectedMonth} onChange={(e) => onMonthChange(Number(e.target.value))}>
+          <select
+            value={selectedMonth === "all" ? "all" : selectedMonth}
+            onChange={(e) => onMonthChange(e.target.value === "all" ? "all" : Number(e.target.value))}
+          >
+            <option value="all">All months</option>
             {monthNames.map((month, idx) => (
               <option key={month} value={idx + 1}>
                 {month}

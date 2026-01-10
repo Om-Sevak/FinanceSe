@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from typing import Optional
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr, constr
 from .account_types import AccountType
 
 
@@ -98,9 +98,33 @@ class CategorizationTrainResponse(BaseModel):
 
 class TransactionCategoryUpdate(BaseModel):
     category: str
-    retrain: bool = False
 
 
 class TransactionCategoryUpdateResponse(BaseModel):
     transaction: TransactionRead
     training: Optional[CategorizationTrainResponse] = None
+
+
+class UserBase(BaseModel):
+    email: EmailStr
+    name: str
+
+
+class UserCreate(UserBase):
+    password: constr(min_length=6, max_length=128)
+
+
+class UserRead(UserBase):
+    id: int
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class TokenData(BaseModel):
+    user_id: Optional[int] = None

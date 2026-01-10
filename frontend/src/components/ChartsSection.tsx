@@ -1,18 +1,19 @@
 import {
   Area,
   AreaChart,
-  Bar,
-  BarChart,
   CartesianGrid,
   Legend,
   Line,
   LineChart,
+  Pie,
+  PieChart,
+  Cell,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
-import type { CategoryExpenseSummary } from "../types";
+import type { CategoryExpenseSummary, TransactionSummary } from "../types";
 
 interface DailyPoint {
   date: string;
@@ -34,6 +35,7 @@ interface Props {
   categorySummary: CategoryExpenseSummary[];
   loadingTransactions: boolean;
   loadingDashboard: boolean;
+  summary: TransactionSummary | null;
 }
 
 export function ChartsSection({
@@ -42,7 +44,48 @@ export function ChartsSection({
   categorySummary,
   loadingTransactions,
   loadingDashboard,
+  summary,
 }: Props) {
+  const RADIAN = Math.PI / 180;
+  const sliceColors = [
+    "#ef4444",
+    "#f97316",
+    "#facc15",
+    "#22c55e",
+    "#14b8a6",
+    "#0ea5e9",
+    "#6366f1",
+    "#ec4899",
+    "#94a3b8",
+    "#7c3aed",
+  ];
+
+  const renderPercentageLabel = ({
+    cx,
+    cy,
+    midAngle,
+    innerRadius,
+    outerRadius,
+    percent,
+  }: any) => {
+    if (percent < 0.03) return null;
+    const radius = innerRadius + (outerRadius - innerRadius) * 0.55;
+    const x = cx + radius * Math.cos(-midAngle * RADIAN);
+    const y = cy + radius * Math.sin(-midAngle * RADIAN);
+    return (
+      <text
+        x={x}
+        y={y}
+        fill="#fff"
+        fontSize={12}
+        textAnchor={x > cx ? "start" : "end"}
+        dominantBaseline="central"
+      >
+        {(percent * 100).toFixed(0)}%
+      </text>
+    );
+  };
+
   return (
     <>
       <section className="charts-grid">
@@ -81,20 +124,36 @@ export function ChartsSection({
           ) : categorySummary.length === 0 ? (
             <p className="placeholder">No categorized expenses.</p>
           ) : (
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart
-                data={categorySummary.map((entry) => ({
-                  ...entry,
-                  amount: Math.abs(entry.total_amount),
-                }))}
-              >
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="category" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="amount" fill="#f97316" />
-              </BarChart>
-            </ResponsiveContainer>
+            (() => {
+              const pieData = categorySummary.map((entry, index) => ({
+                ...entry,
+                amount: Math.abs(entry.total_amount),
+                color: sliceColors[index % sliceColors.length],
+              }));
+              return (
+                <ResponsiveContainer width="100%" height={320}>
+                  <PieChart margin={{ top: 10, right: 10, left: 10, bottom: 10 }}>
+                    <Tooltip formatter={(value: number) => `$${value.toFixed(2)}`} />
+                    <Legend layout="vertical" align="right" verticalAlign="middle" wrapperStyle={{ width: 140 }} />
+                    <Pie
+                      data={pieData}
+                      dataKey="amount"
+                      nameKey="category"
+                      cx="40%"
+                      cy="50%"
+                      outerRadius={100}
+                      innerRadius={40}
+                      labelLine={false}
+                      label={renderPercentageLabel}
+                    >
+                      {pieData.map((entry) => (
+                        <Cell key={`cell-${entry.category}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                  </PieChart>
+                </ResponsiveContainer>
+              );
+            })()
           )}
         </div>
       </section>
@@ -123,6 +182,46 @@ export function ChartsSection({
               <Area type="monotone" dataKey="net" stroke="#2563eb" fill="url(#netGradient)" />
             </AreaChart>
           </ResponsiveContainer>
+        </div>
+        <div className="card">
+          <header>
+            <h2>Allocation Breakdown</h2>
+            <p>How this month's income was used</p>
+          </header>
+          {loadingTransactions ? (
+            <p className="placeholder">Loading summary…</p>
+          ) : !summary ? (
+            <p className="placeholder">No summary available.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={320}>
+              <PieChart margin={{ top: 10, right: 10, left: 10, bottom: 10 }}>
+                <Tooltip formatter={(value: number) => `$${value.toFixed(2)}`} />
+                <Legend verticalAlign="bottom" height={36} />
+                <Pie
+                  data={[
+                    { name: "Expenses", value: Math.abs(summary.total_expenses), fill: "#ef4444" },
+                    { name: "Invested", value: summary.total_invested, fill: "#0ea5e9" },
+                    {
+                      name: "Saved",
+                      value: Math.max(
+                        summary.total_income - Math.abs(summary.total_expenses) - summary.total_invested,
+                        0
+                      ),
+                      fill: "#22c55e",
+                    },
+                  ]}
+                  dataKey="value"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={100}
+                  innerRadius={40}
+                  labelLine={false}
+                  label={renderPercentageLabel}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </section>
     </>

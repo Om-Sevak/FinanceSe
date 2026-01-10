@@ -8,3 +8,5 @@ pdfplumber
 scikit-learn
 numpy
 scipy
+passlib
+python-jose

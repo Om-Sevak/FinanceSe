@@ -1,26 +1,39 @@
-from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import extract, func
 
 from .. import models, schemas
 from ..database import get_db
-from ..account_types import CREDIT_ACCOUNT_TYPES, parse_account_type
 from ..category_labels import canonicalize_category
 from ..category_overrides import record_override
 from ..categorization import categorize_transaction, train_from_transactions
-from ..transaction_logic import classify_transaction, normalize_transaction_amount
+from ..transaction_logic import normalize_transaction_amount
+from ..services.transaction_metrics import (
+    aggregate_transactions,
+    build_category_breakdown,
+    calculate_net_worth,
+    filter_transactions_by_kind,
+)
+from .auth import get_current_user
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
 
 
 @router.post("", response_model=list[schemas.TransactionRead], status_code=201)
-def create_transactions(transactions: list[schemas.TransactionCreate], db: Session = Depends(get_db)):
+def create_transactions(
+    transactions: list[schemas.TransactionCreate],
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
     if not transactions:
         raise HTTPException(status_code=400, detail="No transactions provided")
     account_ids = {txn.account_id for txn in transactions}
-    accounts = db.query(models.Account).filter(models.Account.id.in_(account_ids)).all()
+    accounts = (
+        db.query(models.Account)
+        .filter(models.Account.id.in_(account_ids), models.Account.user_id == current_user.id)
+        .all()
+    )
     account_map = {account.id: account for account in accounts}
     missing = account_ids - set(account_map.keys())
     if missing:
@@ -49,8 +62,13 @@ def list_transactions(
     year: int | None = Query(default=None),
     month: int | None = Query(default=None, ge=1, le=12),
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
-    query = db.query(models.Transaction)
+    query = (
+        db.query(models.Transaction)
+        .join(models.Account)
+        .filter(models.Account.user_id == current_user.id)
+    )
     if account_id is not None:
         query = query.filter(models.Transaction.account_id == account_id)
     if year is not None:
@@ -60,47 +78,12 @@ def list_transactions(
     return query.order_by(models.Transaction.date.desc()).all()
 
 
-def _calculate_transaction_totals(rows):
-    total_income = 0.0
-    total_expenses = 0.0
-    total_invested = 0.0
-
-    for txn, account_type_value in rows:
-        classification = classify_transaction(txn, account_type_value)
-
-        if classification.counts_income:
-            total_income += classification.amount
-        if classification.counts_expense:
-            expense_amount = classification.amount
-            if expense_amount > 0:
-                expense_amount = -abs(expense_amount)
-            total_expenses += expense_amount
-        if classification.counts_invested:
-            total_invested += classification.amount
-
-    return total_income, total_expenses, total_invested
-
-
-def _calculate_net_worth(balances):
-    net_worth = 0.0
-    for _, account_type_value, latest_balance, txn_sum in balances:
-        account_type = parse_account_type(account_type_value)
-        if latest_balance is not None:
-            balance_value = float(latest_balance)
-        else:
-            balance_value = float(txn_sum or 0)
-        if account_type in CREDIT_ACCOUNT_TYPES:
-            net_worth -= balance_value
-        else:
-            net_worth += balance_value
-    return net_worth
-
-
 @router.get("/summary", response_model=schemas.TransactionSummary)
 def get_transaction_summary(
-    year: int = Query(...),
-    month: int = Query(..., ge=1, le=12),
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None, ge=1, le=12),
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     """
     Monthly summary rules:
@@ -112,19 +95,20 @@ def get_transaction_summary(
     rows = (
         db.query(models.Transaction, models.Account.type)
         .join(models.Account)
-        .filter(
-            extract("year", models.Transaction.date) == year,
-            extract("month", models.Transaction.date) == month,
-        )
+        .filter(models.Account.user_id == current_user.id)
         .all()
     )
+    if year is not None:
+        rows = [(txn, atype) for txn, atype in rows if txn.date.year == year]
+    if month is not None:
+        rows = [(txn, atype) for txn, atype in rows if txn.date.month == month]
 
-    total_income, total_expenses, total_invested = _calculate_transaction_totals(rows)
+    totals = aggregate_transactions(rows)
 
-    net_flow = total_income + total_expenses - total_invested
-    savings_rate = net_flow / total_income if total_income > 0 else 0.0
+    net_flow = totals.income + totals.expenses - totals.invested
+    savings_rate = net_flow / totals.income if totals.income > 0 else 0.0
 
-    balances = (
+    balance_query = (
         db.query(
             models.Account.id,
             models.Account.type,
@@ -132,16 +116,23 @@ def get_transaction_summary(
             func.coalesce(func.sum(models.Transaction.amount), 0),
         )
         .outerjoin(models.Transaction)
-        .group_by(models.Account.id, models.Account.type, models.Account.latest_balance)
-        .all()
+        .filter(models.Account.user_id == current_user.id)
     )
+    if year is not None:
+        balance_query = balance_query.filter(extract("year", models.Transaction.date) == year)
+    if month is not None:
+        balance_query = balance_query.filter(extract("month", models.Transaction.date) == month)
 
-    net_worth = _calculate_net_worth(balances)
+    balances = balance_query.group_by(
+        models.Account.id, models.Account.type, models.Account.latest_balance
+    ).all()
+
+    net_worth = calculate_net_worth(balances)
 
     return schemas.TransactionSummary(
-        total_income=total_income,
-        total_expenses=total_expenses,
-        total_invested=total_invested,
+        total_income=totals.income,
+        total_expenses=totals.expenses,
+        total_invested=totals.invested,
         net_flow=net_flow,
         savings_rate=savings_rate,
         net_worth=net_worth,
@@ -152,9 +143,10 @@ def get_transaction_summary(
     "/expenses/by-category", response_model=list[schemas.CategoryExpenseSummary]
 )
 def get_expenses_by_category(
-    year: int = Query(...),
-    month: int = Query(..., ge=1, le=12),
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None, ge=1, le=12),
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     """
     Get a summary of expenses by category for a given year and month.
@@ -162,52 +154,47 @@ def get_expenses_by_category(
     rows = (
         db.query(models.Transaction, models.Account.type)
         .join(models.Account)
-        .filter(
-            extract("year", models.Transaction.date) == year,
-            extract("month", models.Transaction.date) == month,
-        )
+        .filter(models.Account.user_id == current_user.id)
         .all()
     )
+    if year is not None:
+        rows = [(txn, atype) for txn, atype in rows if txn.date.year == year]
+    if month is not None:
+        rows = [(txn, atype) for txn, atype in rows if txn.date.month == month]
 
-    totals: dict[str, float] = defaultdict(float)
-    for txn, account_type_value in rows:
-        raw_category = txn.category or "Uncategorized"
-        category_label = canonicalize_category(raw_category) or "Uncategorized"
-        classification = classify_transaction(txn, account_type_value)
-
-        if not classification.counts_expense:
-            continue
-
-        expense_amount = classification.amount
-        if expense_amount > 0:
-            expense_amount = -abs(expense_amount)
-
-        totals[category_label] += expense_amount
-
-    sorted_totals = sorted(totals.items(), key=lambda item: item[1])
-    return [
-        schemas.CategoryExpenseSummary(category=category, total_amount=total)
-        for category, total in sorted_totals
-    ]
+    return build_category_breakdown(rows)
 
 
 @router.delete("/dev/purge", status_code=204)
-def purge_all_transactions(db: Session = Depends(get_db)):
+def purge_all_transactions(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     """
     DEVELOPMENT ONLY: delete every recorded transaction.
     """
-    db.query(models.Transaction).delete()
-    db.query(models.Account).update({models.Account.latest_balance: None})
+    accounts = db.query(models.Account).filter(models.Account.user_id == current_user.id).all()
+    account_ids = [acct.id for acct in accounts]
+    if account_ids:
+        db.query(models.Transaction).filter(models.Transaction.account_id.in_(account_ids)).delete()
+        db.query(models.Account).filter(models.Account.id.in_(account_ids)).update(
+            {models.Account.latest_balance: None}
+        )
     db.commit()
     return None
 
 
 @router.post("/dev/re-categorize", status_code=200)
-def recategorize_transactions(db: Session = Depends(get_db)):
+def recategorize_transactions(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
     """
     DEVELOPMENT ONLY: re-run categorization rules for all transactions.
     """
-    transactions = db.query(models.Transaction).all()
+    transactions = (
+        db.query(models.Transaction)
+        .join(models.Account)
+        .filter(models.Account.user_id == current_user.id)
+        .all()
+    )
     updated = 0
     for txn in transactions:
         account = txn.account
@@ -234,13 +221,15 @@ def update_transaction_category(
     transaction_id: int,
     payload: schemas.TransactionCategoryUpdate,
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     """
-    Update a transaction's category. Optionally trigger retraining using all categorized transactions.
+    Update a transaction's category and retrain using all categorized transactions.
     """
     txn = (
         db.query(models.Transaction)
-        .filter(models.Transaction.id == transaction_id)
+        .join(models.Account)
+        .filter(models.Transaction.id == transaction_id, models.Account.user_id == current_user.id)
         .first()
     )
     if not txn:
@@ -251,17 +240,15 @@ def update_transaction_category(
     db.commit()
     db.refresh(txn)
 
-    training_report = None
-    if payload.retrain:
-        categorized = (
-            db.query(models.Transaction)
-            .join(models.Account)
-            .filter(models.Transaction.category.isnot(None))
-            .all()
-        )
-        training_report = train_from_transactions(categorized)
-        if not training_report.trained:
-            raise HTTPException(status_code=400, detail="Retraining did not run. Provide categorized data.")
+    categorized = (
+        db.query(models.Transaction)
+        .join(models.Account)
+        .filter(models.Transaction.category.isnot(None), models.Account.user_id == current_user.id)
+        .all()
+    )
+    training_report = train_from_transactions(categorized)
+    if not training_report.trained:
+        raise HTTPException(status_code=400, detail="Retraining did not run. Provide categorized data.")
 
     return schemas.TransactionCategoryUpdateResponse(
         transaction=txn,
@@ -279,36 +266,24 @@ def update_transaction_category(
     )
 
 
-def _should_include_transaction(txn: models.Transaction, account_type_value: str, kind: str):
-    classification = classify_transaction(txn, account_type_value)
-
-    if kind == "investment":
-        return classification.counts_invested
-    if kind == "income":
-        return classification.counts_income
-    if kind == "expense":
-        return classification.counts_expense
-    return False
-
-
 @router.get("/breakdown", response_model=list[schemas.TransactionRead])
 def get_transaction_breakdown(
     kind: str = Query(..., pattern="^(income|expense|investment)$"),
-    year: int = Query(...),
-    month: int = Query(..., ge=1, le=12),
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None, ge=1, le=12),
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     rows = (
         db.query(models.Transaction, models.Account.type)
         .join(models.Account)
-        .filter(
-            extract("year", models.Transaction.date) == year,
-            extract("month", models.Transaction.date) == month,
-        )
+        .filter(models.Account.user_id == current_user.id)
         .all()
     )
 
-    filtered = [
-        txn for txn, account_type_value in rows if _should_include_transaction(txn, account_type_value, kind)
-    ]
-    return filtered
+    if year is not None:
+        rows = [(txn, atype) for txn, atype in rows if txn.date.year == year]
+    if month is not None:
+        rows = [(txn, atype) for txn, atype in rows if txn.date.month == month]
+
+    return filter_transactions_by_kind(rows, kind)

@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from decimal import Decimal
 from io import StringIO
 from typing import Any
 
@@ -8,8 +9,11 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models, schemas
 from ..categorization import categorize_with_details
-from ..account_types import AccountType, CREDIT_ACCOUNT_TYPES, parse_account_type
+from ..account_types import AccountType, parse_account_type
 from ..services.pdf_ingestion import PDFTransactionExtractor, TransactionRow
+from ..category_labels import canonicalize_category
+from ..transaction_logic import normalize_transaction_amount
+from .auth import get_current_user
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
 _pdf_extractor = PDFTransactionExtractor()
@@ -28,7 +32,7 @@ PAYMENT_KEYWORDS = {}
 def _build_transactions(account: models.Account, rows: Iterable[Any]):
     account_type = parse_account_type(account.type)
     transactions: list[models.Transaction] = []
-    last_balance: float | None = None
+    last_balance: Decimal | None = None
     for row in rows:
         if isinstance(row, TransactionRow):
             description = row.description.strip()
@@ -48,14 +52,15 @@ def _build_transactions(account: models.Account, rows: Iterable[Any]):
         if pd.isna(parsed_date):
             continue
 
-        amount_value = _adjust_amount_for_account_type(account_type, float(amount_value))
+        amount_value = Decimal(amount_value)
         prediction = categorize_with_details(
             description,
             amount=amount_value,
             date_value=parsed_date.date(),
             account_type=account_type.value,
         )
-        category = prediction.category
+        category = canonicalize_category(prediction.category)
+        amount_value = normalize_transaction_amount(amount_value, account_type.value, category)
         
         txn_data = schemas.TransactionCreate(
             account_id=account.id,
@@ -66,11 +71,11 @@ def _build_transactions(account: models.Account, rows: Iterable[Any]):
             currency=account.currency,
             category=category,
         )
-        transactions.append(models.Transaction(**txn_data.dict()))
+        transactions.append(models.Transaction(**txn_data.model_dump()))
 
         if balance_value is not None and not pd.isna(balance_value):
             try:
-                last_balance = float(balance_value)
+                last_balance = Decimal(balance_value)
             except (TypeError, ValueError):
                 continue
     return transactions, last_balance
@@ -157,22 +162,23 @@ def _parse_csv_bytes(contents: bytes) -> list[dict[str, Any]]:
     return parsed_df.to_dict("records")
 
 
-def _adjust_amount_for_account_type(account_type: AccountType, amount: float) -> float:
-    if account_type in CREDIT_ACCOUNT_TYPES:
-        return -amount
-    return amount
-
-
 @router.post("/{account_id}/csv", response_model=list[schemas.TransactionRead])
 async def upload_csv(
-    account_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)
+    account_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     """
     Upload a CSV file with transactions for a specific account.
     The CSV is parsed and transactions are saved to the database.
     The CSV must contain 'Date', 'Description', and 'Amount' columns.
     """
-    account = db.query(models.Account).filter(models.Account.id == account_id).first()
+    account = (
+        db.query(models.Account)
+        .filter(models.Account.id == account_id, models.Account.user_id == current_user.id)
+        .first()
+    )
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
@@ -207,13 +213,20 @@ async def upload_csv(
 
 @router.post("/{account_id}/pdf", response_model=list[schemas.TransactionRead])
 async def upload_pdf(
-    account_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)
+    account_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     """
     Upload a PDF statement with columns: Date, Description, Amount, Balance.
     The PDF is parsed into transactions and saved to the database.
     """
-    account = db.query(models.Account).filter(models.Account.id == account_id).first()
+    account = (
+        db.query(models.Account)
+        .filter(models.Account.id == account_id, models.Account.user_id == current_user.id)
+        .first()
+    )
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 

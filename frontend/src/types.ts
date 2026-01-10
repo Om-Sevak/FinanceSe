@@ -51,7 +51,6 @@ export interface ListTransactionsParams {
 
 export interface TransactionCategoryUpdatePayload {
   category: string;
-  retrain?: boolean;
 }
 
 export interface CategorizationTrainResponse {
@@ -67,4 +66,16 @@ export interface CategorizationTrainResponse {
 export interface TransactionCategoryUpdateResponse {
   transaction: Transaction;
   training?: CategorizationTrainResponse;
+}
+
+export interface User {
+  id: number;
+  email: string;
+  name: string;
+  created_at: string;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
 }

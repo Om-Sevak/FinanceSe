@@ -1,19 +1,34 @@
 from datetime import datetime
+from datetime import datetime
 from sqlalchemy import Column, Integer, String, Date, DateTime, Numeric, ForeignKey
 from sqlalchemy.orm import relationship
 from .database import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    accounts = relationship("Account", back_populates="user", cascade="all, delete-orphan")
 
 
 class Account(Base):
     __tablename__ = "accounts"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     name = Column(String, nullable=False)
     type = Column(String, nullable=False)
     institution = Column(String, nullable=False)
     currency = Column(String, nullable=False)
     latest_balance = Column(Numeric(14, 2), nullable=True)
 
+    user = relationship("User", back_populates="accounts")
     transactions = relationship(
         "Transaction",
         back_populates="account",

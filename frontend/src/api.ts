@@ -8,6 +8,8 @@ import type {
   ListTransactionsParams,
   TransactionCategoryUpdatePayload,
   TransactionCategoryUpdateResponse,
+  TokenResponse,
+  User,
 } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
@@ -15,6 +17,20 @@ const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 const client = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true,
+});
+
+let authToken: string | null = null;
+
+export function setAuthToken(token: string | null) {
+  authToken = token;
+}
+
+client.interceptors.request.use((config) => {
+  if (authToken) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${authToken}`;
+  }
+  return config;
 });
 
 export async function listAccounts() {
@@ -36,29 +52,34 @@ export async function listTransactions(params: ListTransactionsParams = {}) {
   return data;
 }
 
-export async function getMonthlySummary(year: number, month: number) {
-  const { data } = await client.get<TransactionSummary>("/transactions/summary", {
-    params: { year, month },
-  });
+export async function getMonthlySummary(year?: number, month?: number) {
+  const params: Record<string, number> = {};
+  if (typeof year === "number") params.year = year;
+  if (typeof month === "number") params.month = month;
+  const { data } = await client.get<TransactionSummary>("/transactions/summary", { params });
   return data;
 }
 
-export async function getExpensesByCategory(year: number, month: number) {
+export async function getExpensesByCategory(year?: number, month?: number) {
+  const params: Record<string, number> = {};
+  if (typeof year === "number") params.year = year;
+  if (typeof month === "number") params.month = month;
   const { data } = await client.get<CategoryExpenseSummary[]>(
     "/transactions/expenses/by-category",
-    { params: { year, month } },
+    { params },
   );
   return data;
 }
 
 export async function getTransactionBreakdown(
   kind: "income" | "expense" | "investment",
-  year: number,
-  month: number,
+  year?: number,
+  month?: number,
 ) {
-  const { data } = await client.get<Transaction[]>("/transactions/breakdown", {
-    params: { kind, year, month },
-  });
+  const params: Record<string, any> = { kind };
+  if (typeof year === "number") params.year = year;
+  if (typeof month === "number") params.month = month;
+  const { data } = await client.get<Transaction[]>("/transactions/breakdown", { params });
   return data;
 }
 
@@ -111,5 +132,25 @@ export async function updateTransactionCategory(
     `/transactions/${transactionId}/category`,
     payload,
   );
+  return data;
+}
+
+export async function registerUser(payload: { name: string; email: string; password: string }) {
+  const { data } = await client.post<User>("/auth/register", payload);
+  return data;
+}
+
+export async function loginUser(payload: { email: string; password: string }) {
+  const form = new FormData();
+  form.append("username", payload.email);
+  form.append("password", payload.password);
+  const { data } = await client.post<TokenResponse>("/auth/login", form, {
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  });
+  return data;
+}
+
+export async function getCurrentUser() {
+  const { data } = await client.get<User>("/auth/me");
   return data;
 }

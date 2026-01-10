@@ -38,10 +38,12 @@ interface UploadModalProps {
   accounts: Account[];
   uploadAccountId: string;
   uploadFormat: "csv" | "pdf";
+  uploadFolderMode: boolean;
   uploading: boolean;
   onAccountChange: (value: string) => void;
   onFormatChange: (value: "csv" | "pdf") => void;
-  onFileChange: (file: File | null) => void;
+  onFolderModeChange: (value: boolean) => void;
+  onFileChange: (files: File[]) => void;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
 }
 
@@ -51,9 +53,11 @@ export function UploadModal({
   accounts,
   uploadAccountId,
   uploadFormat,
+  uploadFolderMode,
   uploading,
   onAccountChange,
   onFormatChange,
+  onFolderModeChange,
   onFileChange,
   onSubmit,
 }: UploadModalProps) {
@@ -87,13 +91,22 @@ export function UploadModal({
             </select>
           </label>
           <label>
-            {uploadFormat === "pdf" ? "PDF Statement" : "CSV File"}
+            {uploadFormat === "pdf" ? "PDF Statement" : "CSV File or Folder"}
             <input
               type="file"
               accept={uploadFormat === "pdf" ? "application/pdf,.pdf" : ".csv,text/csv"}
-              onChange={(e) => onFileChange(e.target.files?.[0] ?? null)}
+              multiple={uploadFolderMode}
+              // @ts-ignore
+              webkitdirectory={uploadFolderMode && uploadFormat === "csv" ? "true" : undefined}
+              directory={uploadFolderMode && uploadFormat === "csv" ? "true" : undefined}
+              onChange={(e) => onFileChange(Array.from(e.target.files ?? []))}
               required
             />
+            <small>
+              {uploadFolderMode
+                ? "Folder mode: we will import every CSV in the selected folder."
+                : "File mode: pick a single statement file."}
+            </small>
           </label>
           <div className="format-toggle">
             <label>
@@ -117,6 +130,16 @@ export function UploadModal({
               PDF
             </label>
           </div>
+          {uploadFormat === "csv" && (
+            <label className="format-toggle">
+              <input
+                type="checkbox"
+                checked={uploadFolderMode}
+                onChange={(e) => onFolderModeChange(e.target.checked)}
+              />
+              Upload an entire folder of CSV statements
+            </label>
+          )}
           <button type="submit" className="action-button" disabled={uploading}>
             {uploading ? "Uploading..." : "Upload & categorize"}
           </button>
@@ -131,7 +154,7 @@ interface BreakdownModalProps {
   open: boolean;
   onClose: () => void;
   monthLabel: string;
-  year: number;
+  year: number | "all";
   transactions: Transaction[];
   loading: boolean;
   label: string;
@@ -200,3 +223,5 @@ export function BreakdownModal({
     </div>
   );
 }
+
+

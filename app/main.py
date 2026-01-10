@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database import Base, engine
-from .routers import accounts, transactions, uploads, categorization
+from .routers import accounts, transactions, uploads, categorization, auth
 
 app = FastAPI(title="Finance Dashboard API")
 
@@ -17,6 +17,7 @@ app.include_router(accounts.router)
 app.include_router(transactions.router)
 app.include_router(uploads.router)
 app.include_router(categorization.router)
+app.include_router(auth.router)
 
 
 @app.on_event("startup")
