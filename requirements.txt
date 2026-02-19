@@ -10,3 +10,4 @@ numpy
 scipy
 passlib
 python-jose
+email-validator
