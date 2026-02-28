@@ -18,6 +18,7 @@ class AccountCreate(AccountBase):
 
 class AccountRead(AccountBase):
     id: int
+    plaid_account_id: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -119,6 +120,29 @@ class UserRead(UserBase):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class PlaidItemRead(BaseModel):
+    id: int
+    institution_name: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LinkTokenResponse(BaseModel):
+    link_token: str
+
+
+class ExchangeTokenRequest(BaseModel):
+    public_token: str
+    institution_name: str = "Connected Bank"
+
+
+class PlaidSyncResponse(BaseModel):
+    added: int
+    modified: int
+    removed: int
 
 
 class Token(BaseModel):

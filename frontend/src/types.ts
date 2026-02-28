@@ -5,6 +5,7 @@ export interface Account {
   institution: string;
   currency: string;
   latest_balance?: number | null;
+  plaid_account_id?: string | null;
 }
 
 export interface AccountCreate {
@@ -78,4 +79,20 @@ export interface User {
 export interface TokenResponse {
   access_token: string;
   token_type: string;
+}
+
+export interface PlaidItem {
+  id: number;
+  institution_name: string;
+  created_at: string;
+}
+
+export interface LinkTokenResponse {
+  link_token: string;
+}
+
+export interface PlaidSyncResponse {
+  added: number;
+  modified: number;
+  removed: number;
 }

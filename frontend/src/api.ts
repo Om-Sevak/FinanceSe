@@ -10,6 +10,9 @@ import type {
   TransactionCategoryUpdateResponse,
   TokenResponse,
   User,
+  LinkTokenResponse,
+  PlaidItem,
+  PlaidSyncResponse,
 } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
@@ -152,5 +155,31 @@ export async function loginUser(payload: { email: string; password: string }) {
 
 export async function getCurrentUser() {
   const { data } = await client.get<User>("/auth/me");
+  return data;
+}
+
+export async function createLinkToken(): Promise<LinkTokenResponse> {
+  const { data } = await client.post<LinkTokenResponse>("/plaid/link-token");
+  return data;
+}
+
+export async function exchangeToken(
+  publicToken: string,
+  institutionName: string,
+): Promise<Account[]> {
+  const { data } = await client.post<Account[]>("/plaid/exchange-token", {
+    public_token: publicToken,
+    institution_name: institutionName,
+  });
+  return data;
+}
+
+export async function syncPlaidAccount(accountId: number): Promise<PlaidSyncResponse> {
+  const { data } = await client.post<PlaidSyncResponse>(`/plaid/sync/${accountId}`);
+  return data;
+}
+
+export async function listPlaidItems(): Promise<PlaidItem[]> {
+  const { data } = await client.get<PlaidItem[]>("/plaid/items");
   return data;
 }

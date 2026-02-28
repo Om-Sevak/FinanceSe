@@ -11,3 +11,5 @@ scipy
 passlib
 python-jose
 email-validator
+plaid-python
+cryptography

@@ -18,6 +18,7 @@ import {
   loginUser,
   getCurrentUser,
   setAuthToken,
+  syncPlaidAccount,
 } from "./api";
 import type {
   Account,
@@ -123,6 +124,7 @@ export default function App() {
   const [notification, setNotification] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updatingCategoryId, setUpdatingCategoryId] = useState<number | null>(null);
+  const [syncingAccountId, setSyncingAccountId] = useState<number | null>(null);
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [authSubmitting, setAuthSubmitting] = useState(false);
@@ -498,6 +500,30 @@ export default function App() {
     }
   }
 
+  async function handlePlaidSync(accountId: number) {
+    setSyncingAccountId(accountId);
+    setError(null);
+    try {
+      const result = await syncPlaidAccount(accountId);
+      setNotification(
+        `Synced ${result.added} new transaction${result.added === 1 ? "" : "s"}.`,
+      );
+      await Promise.all([loadMonthlyData(), loadDashboardData(), loadYearlySnapshot()]);
+    } catch (err) {
+      console.error(err);
+      setError("Failed to sync account.");
+    } finally {
+      setSyncingAccountId(null);
+    }
+  }
+
+  function handleAccountsConnected(newAccounts: Account[]) {
+    setAccounts((prev) => [...prev, ...newAccounts]);
+    setNotification(
+      `Connected ${newAccounts.length} account${newAccounts.length === 1 ? "" : "s"}.`,
+    );
+  }
+
   async function loadAllData() {
     await Promise.all([loadAccounts(), loadMonthlyData(), loadDashboardData(), loadYearlySnapshot()]);
   }
@@ -664,6 +690,10 @@ export default function App() {
                     setUploadAccountId(String(id));
                     setShowUploadModal(true);
                   }}
+                  onSync={handlePlaidSync}
+                  onAccountsConnected={handleAccountsConnected}
+                  onError={setError}
+                  syncingAccountId={syncingAccountId}
                 />
               </section>
             ),
